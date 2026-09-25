@@ -4,10 +4,12 @@
 
 function renderItem(f) {
   const badgeClass = `${f.level}-badge`;
-  const expand = (f.level === "fail" || f.level === "warn") && (f.why || f.recommendation);
+  const expandFinding = (f.level === "fail" || f.level === "warn") && (f.why || f.recommendation);
+  const hasValue = f.value !== undefined;
   let body = "";
-  if (expand) {
+  if (expandFinding || hasValue) {
     body = `<div class="item-body">
+      ${hasValue ? `<div class="finding-label">Raw value (${f.valueLength} chars)</div><div class="finding-text cookie-value">${escapeHtml(f.value)}</div>` : ""}
       ${f.why ? `<div class="finding-label">Why this is a finding</div><div class="finding-text">${f.why}</div>` : ""}
       ${f.recommendation ? `<div class="finding-label">Recommended remediation</div><div class="finding-text">${f.recommendation}</div>` : ""}
     </div>`;
@@ -17,6 +19,10 @@ function renderItem(f) {
     <div class="item-observed">${f.observed}</div>
     ${body}
   </div>`;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
 function renderSection(findings) {
@@ -179,14 +185,19 @@ function checkHeaders(headers, isHttps) {
 // ---------- Cookie checks ----------
 const SESSION_LIKE_RE = /(sess|sid|jsessionid|phpsessid|auth|token|jwt|login|account|uid|identity)/i;
 
-// Plain list of cookie names present for this origin, with basic scope/lifetime info.
-// This is informational (not pass/fail) so it always renders even when everything is safe.
+// Plain list of cookie names present for this origin, with basic scope/lifetime info
+// and the raw value (for manual replay/tampering testing). This is informational
+// (not pass/fail) so it always renders even when everything else is safe.
+// NOTE: raw values are live session material — anything you export or screenshot
+// from this section should be handled like credentials.
 function buildCookieInventory(cookies) {
   if (!cookies || cookies.length === 0) return [];
   return cookies.map((c) => ({
     level: "info",
     title: `Cookie: ${c.name}`,
-    observed: `Domain: ${c.domain}${c.hostOnly ? " (host-only)" : " (domain-wide — sent to all subdomains)"} | Path: ${c.path} | ${c.session ? "Session cookie (deleted on browser close)" : `Persistent, expires ${new Date(c.expirationDate * 1000).toLocaleDateString()}`}${SESSION_LIKE_RE.test(c.name) ? " | Looks like a session/auth cookie" : ""}`
+    observed: `Domain: ${c.domain}${c.hostOnly ? " (host-only)" : " (domain-wide — sent to all subdomains)"} | Path: ${c.path} | ${c.session ? "Session cookie (deleted on browser close)" : `Persistent, expires ${new Date(c.expirationDate * 1000).toLocaleDateString()}`}${SESSION_LIKE_RE.test(c.name) ? " | Looks like a session/auth cookie" : ""}`,
+    value: c.value,
+    valueLength: c.value ? c.value.length : 0
   }));
 }
 
