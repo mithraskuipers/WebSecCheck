@@ -14,8 +14,9 @@ function renderItem(f) {
       ${f.recommendation ? `<div class="finding-label">Recommended remediation</div><div class="finding-text">${f.recommendation}</div>` : ""}
     </div>`;
   }
+  const catTag = f.category ? `<span class="cat-tag">${f.category}</span>` : "";
   return `<div class="item">
-    <div class="item-head"><span class="badge ${badgeClass}">${f.level.toUpperCase()}</span><span class="item-title">${f.title}</span></div>
+    <div class="item-head"><span class="badge ${badgeClass}">${f.level.toUpperCase()}</span>${catTag}<span class="item-title">${f.title}</span></div>
     <div class="item-observed">${f.observed}</div>
     ${body}
   </div>`;
@@ -30,12 +31,49 @@ function renderSection(findings) {
   return findings.map(renderItem).join("");
 }
 
+// Tag each finding with which subtopic/category it came from, so the flattened
+// filter-by-level view can still show where each item belongs.
+function tagCategory(findings, category) {
+  return (findings || []).map(f => ({ ...f, category }));
+}
+
 function renderSummary(allFindings) {
   const counts = { pass: 0, warn: 0, fail: 0, info: 0 };
   allFindings.forEach(f => { counts[f.level] = (counts[f.level] || 0) + 1; });
-  const box = (cls, label, n) => `<div class="sum-${cls}"><span class="sum-count">${n}</span><span class="sum-label">${label}</span></div>`;
+  const box = (cls, label, n) => `<div class="sum-${cls}" data-level="${cls}"><span class="sum-count">${n}</span><span class="sum-label">${label}</span></div>`;
   return box("fail", "FAIL", counts.fail) + box("warn", "WARN", counts.warn) + box("pass", "PASS", counts.pass) + box("info", "INFO", counts.info);
 }
+
+// ---------- Filter-by-level view ----------
+let currentTaggedFindings = [];
+
+function showFilter(level) {
+  const items = currentTaggedFindings.filter(f => f.level === level);
+  document.getElementById("sectioned").style.display = "none";
+  document.getElementById("filterBar").style.display = "flex";
+  document.getElementById("filterTitle").textContent = `${level.toUpperCase()} (${items.length})`;
+  document.getElementById("filterResults").innerHTML = items.length ? renderSection(items) : `<div class="empty">Nothing at this level.</div>`;
+  document.querySelectorAll("#summary > div").forEach(el => el.classList.toggle("active-filter", el.dataset.level === level));
+}
+
+function clearFilterView() {
+  document.getElementById("sectioned").style.display = "block";
+  document.getElementById("filterBar").style.display = "none";
+  document.getElementById("filterResults").innerHTML = "";
+  document.querySelectorAll("#summary > div").forEach(el => el.classList.remove("active-filter"));
+}
+
+document.getElementById("summary").addEventListener("click", (e) => {
+  const box = e.target.closest("[data-level]");
+  if (!box) return;
+  const level = box.dataset.level;
+  if (box.classList.contains("active-filter")) {
+    clearFilterView();
+  } else {
+    showFilter(level);
+  }
+});
+document.getElementById("clearFilter").addEventListener("click", clearFilterView);
 
 // ---------- Header checks ----------
 function checkHeaders(headers, isHttps) {
@@ -480,6 +518,13 @@ async function run() {
   document.getElementById("recon").innerHTML = renderSection(reconFindings);
 
   document.getElementById("summary").innerHTML = renderSummary([...headerFindings, ...cookieFindings, ...pageFindings, ...reconFindings]);
+  currentTaggedFindings = [
+    ...tagCategory(headerFindings, "Security Headers"),
+    ...tagCategory(cookieFindings, "Cookie Hijacking Risk"),
+    ...tagCategory(pageFindings, "Page-Level Checks"),
+    ...tagCategory(reconFindings, "Reconnaissance")
+  ];
+  clearFilterView();
   lastResults.findings = { headers: headerFindings, cookieInventory, cookies: cookieFindings, page: pageFindings, recon: reconFindings };
 
   document.getElementById("status").textContent = "";
