@@ -1,6 +1,9 @@
-// ---------- Finding rendering ----------
-// Each check produces: { level: pass|warn|fail|info, title, observed, why, recommendation }
-// "why" and "recommendation" are only shown (and only required) for warn/fail.
+// ============================================================
+// Rendering primitives
+// ============================================================
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
 
 function renderItem(f) {
   const badgeClass = `${f.level}-badge`;
@@ -22,19 +25,26 @@ function renderItem(f) {
   </div>`;
 }
 
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-}
-
-function renderSection(findings) {
-  if (!findings || findings.length === 0) return `<div class="empty">No checks ran.</div>`;
-  return findings.map(renderItem).join("");
-}
-
-// Tag each finding with which subtopic/category it came from, so the flattened
-// filter-by-level view can still show where each item belongs.
 function tagCategory(findings, category) {
   return (findings || []).map(f => ({ ...f, category }));
+}
+
+const CATEGORY_ORDER = ["Security Headers", "Cookies", "Page-Level Checks", "Reconnaissance", "TLS / Certificate"];
+
+// Grouped-by-category view (used when no filters are active) keeps the tool
+// readable at a glance; a flat list (used once any filter is applied) is what
+// makes "find everything matching X" fast. Category pills stay on every item
+// either way so it's always clear which subtopic something belongs to.
+function renderResults(items, grouped) {
+  if (!items.length) return `<div class="empty">No matching results.</div>`;
+  if (!grouped) return items.map(renderItem).join("");
+  let html = "";
+  CATEGORY_ORDER.forEach((cat) => {
+    const group = items.filter(f => f.category === cat);
+    if (!group.length) return;
+    html += `<div class="group-heading">${cat} (${group.length})</div>` + group.map(renderItem).join("");
+  });
+  return html;
 }
 
 function renderSummary(allFindings) {
@@ -44,38 +54,9 @@ function renderSummary(allFindings) {
   return box("fail", "FAIL", counts.fail) + box("warn", "WARN", counts.warn) + box("pass", "PASS", counts.pass) + box("info", "INFO", counts.info);
 }
 
-// ---------- Filter-by-level view ----------
-let currentTaggedFindings = [];
-
-function showFilter(level) {
-  const items = currentTaggedFindings.filter(f => f.level === level);
-  document.getElementById("sectioned").style.display = "none";
-  document.getElementById("filterBar").style.display = "flex";
-  document.getElementById("filterTitle").textContent = `${level.toUpperCase()} (${items.length})`;
-  document.getElementById("filterResults").innerHTML = items.length ? renderSection(items) : `<div class="empty">Nothing at this level.</div>`;
-  document.querySelectorAll("#summary > div").forEach(el => el.classList.toggle("active-filter", el.dataset.level === level));
-}
-
-function clearFilterView() {
-  document.getElementById("sectioned").style.display = "block";
-  document.getElementById("filterBar").style.display = "none";
-  document.getElementById("filterResults").innerHTML = "";
-  document.querySelectorAll("#summary > div").forEach(el => el.classList.remove("active-filter"));
-}
-
-document.getElementById("summary").addEventListener("click", (e) => {
-  const box = e.target.closest("[data-level]");
-  if (!box) return;
-  const level = box.dataset.level;
-  if (box.classList.contains("active-filter")) {
-    clearFilterView();
-  } else {
-    showFilter(level);
-  }
-});
-document.getElementById("clearFilter").addEventListener("click", clearFilterView);
-
-// ---------- Header checks ----------
+// ============================================================
+// Header checks
+// ============================================================
 function checkHeaders(headers, isHttps) {
   const h = headers || {};
   const out = [];
@@ -220,31 +201,16 @@ function checkHeaders(headers, isHttps) {
   return out;
 }
 
-// ---------- Cookie checks ----------
+// ============================================================
+// Cookie checks — one item per cookie, combining inventory info
+// (domain/path/lifetime/value) with the hijacking-risk assessment,
+// so each cookie shows up exactly once instead of split across sections.
+// ============================================================
 const SESSION_LIKE_RE = /(sess|sid|jsessionid|phpsessid|auth|token|jwt|login|account|uid|identity)/i;
 
-// Plain list of cookie names present for this origin, with basic scope/lifetime info
-// and the raw value (for manual replay/tampering testing). This is informational
-// (not pass/fail) so it always renders even when everything else is safe.
-// NOTE: raw values are live session material — anything you export or screenshot
-// from this section should be handled like credentials.
-function buildCookieInventory(cookies) {
-  if (!cookies || cookies.length === 0) return [];
-  return cookies.map((c) => ({
-    level: "info",
-    title: `Cookie: ${c.name}`,
-    observed: `Domain: ${c.domain}${c.hostOnly ? " (host-only)" : " (domain-wide — sent to all subdomains)"} | Path: ${c.path} | ${c.session ? "Session cookie (deleted on browser close)" : `Persistent, expires ${new Date(c.expirationDate * 1000).toLocaleDateString()}`}${SESSION_LIKE_RE.test(c.name) ? " | Looks like a session/auth cookie" : ""}`,
-    value: c.value,
-    valueLength: c.value ? c.value.length : 0
-  }));
-}
-
-// Per-cookie hijacking-focused risk assessment: for each of the three ways a cookie
-// can be stolen or ridden (network sniffing, XSS/JS access, cross-site request), state
-// plainly whether this cookie is protected against it.
-function checkCookies(cookies, isHttps) {
+function mergeCookieFindings(cookies, isHttps) {
   if (!cookies || cookies.length === 0) {
-    return [{ level: "info", title: "Cookies", observed: "No cookies found for this origin." }];
+    return [{ level: "info", title: "No cookies found for this origin", observed: "—" }];
   }
   return cookies.map((c) => {
     const issues = [];
@@ -263,10 +229,13 @@ function checkCookies(cookies, isHttps) {
       if (level === "pass") level = "warn";
     }
 
+    const scopeInfo = `Domain: ${c.domain}${c.hostOnly ? " (host-only)" : " (domain-wide)"} | Path: ${c.path} | ${c.session ? "Session cookie" : `Persistent, expires ${new Date(c.expirationDate * 1000).toLocaleDateString()}`}${isSessionLike ? " | session/auth-like" : ""}`;
+
     if (level === "pass") {
       return {
         level: "pass", title: `Cookie: ${c.name} — resistant to common hijacking vectors`,
-        observed: `Secure, HttpOnly, SameSite=${sameSite}${isSessionLike ? ", host-scoped" : ""}. Network sniffing (needs Secure bypass), JS/XSS theft (needs HttpOnly bypass), and cross-site riding (needs SameSite bypass) are all mitigated for this cookie.`
+        observed: `Secure, HttpOnly, SameSite=${sameSite}. ${scopeInfo}. Network sniffing, JS/XSS theft, and cross-site riding are all mitigated for this cookie.`,
+        value: c.value, valueLength: c.value ? c.value.length : 0
       };
     }
 
@@ -277,27 +246,29 @@ function checkCookies(cookies, isHttps) {
       recParts.push("Set the Secure attribute on this cookie.");
     }
     if (issues.some(i => i.includes("HttpOnly"))) {
-      whyParts.push("Hijacking via XSS: without HttpOnly, `document.cookie` can read this cookie from JavaScript. Any injected script (stored, reflected, or DOM XSS anywhere on the site) can exfiltrate it to an attacker-controlled server, who then simply sets the same cookie in their own browser to take over the session — this is the classic 'cookie hijacking' path.");
+      whyParts.push("Hijacking via XSS: without HttpOnly, `document.cookie` can read this cookie from JavaScript. Any injected script (stored, reflected, or DOM XSS anywhere on the site) can exfiltrate it to an attacker-controlled server, who then simply sets the same cookie in their own browser to take over the session — the classic 'cookie hijacking' path.");
       recParts.push("Set the HttpOnly attribute so the cookie is inaccessible to JavaScript.");
     }
     if (issues.some(i => i.includes("SameSite"))) {
-      whyParts.push("Hijacking-adjacent risk via cross-site requests: a weak/unset SameSite value means this cookie still rides along on requests triggered from another site the victim has open, which is the precondition for CSRF and can be chained with other bugs to act as the victim without ever stealing the cookie value itself.");
-      recParts.push("Set SameSite=Lax (or Strict where the flow allows) unless this cookie specifically needs cross-site delivery, in which case pair SameSite=None with Secure and add CSRF tokens.");
+      whyParts.push("Hijacking-adjacent risk via cross-site requests: a weak/unset SameSite value means this cookie still rides along on requests triggered from another site the victim has open — the precondition for CSRF, and can be chained with other bugs to act as the victim without stealing the value.");
+      recParts.push("Set SameSite=Lax (or Strict where the flow allows) unless this cookie needs cross-site delivery, in which case pair SameSite=None with Secure and add CSRF tokens.");
     }
     if (issues.some(i => i.includes("parent domain"))) {
-      whyParts.push("Broadened attack surface: this looks like a session/auth cookie but is scoped to the whole parent domain rather than just this host, so it is also sent to (and can potentially be set by) every subdomain. A vulnerability on any single subdomain — an XSS bug, a forgotten dev host, a subdomain takeover — can be used to steal or overwrite this cookie for the whole domain.");
-      recParts.push("Scope session/auth cookies to the specific host that needs them rather than the parent domain, unless true cross-subdomain SSO is a requirement.");
+      whyParts.push("Broadened attack surface: this looks like a session/auth cookie but is scoped to the whole parent domain rather than just this host, so it's also sent to (and can potentially be set by) every subdomain. A vulnerability on any single subdomain can be used to steal or overwrite it for the whole domain.");
+      recParts.push("Scope session/auth cookies to the specific host that needs them unless true cross-subdomain SSO is required.");
     }
     return {
       level, title: `Cookie: ${c.name}${isSessionLike ? " (session/auth-like)" : ""}`,
-      observed: issues.join(", "),
-      why: whyParts.join(" "),
-      recommendation: recParts.join(" ")
+      observed: `${issues.join(", ")}. ${scopeInfo}.`,
+      why: whyParts.join(" "), recommendation: recParts.join(" "),
+      value: c.value, valueLength: c.value ? c.value.length : 0
     };
   });
 }
 
-// ---------- Page-level DOM checks (runs inside the page) ----------
+// ============================================================
+// Page-level DOM checks (runs inside the page)
+// ============================================================
 function collectPageSignals() {
   const result = {
     mixedContent: [], insecureForms: [], passwordIssues: [], inlineScriptCount: 0,
@@ -453,7 +424,9 @@ function pageChecksToFindings(sig, isHttps) {
   return out;
 }
 
-// ---------- Recon (robots.txt / security.txt) ----------
+// ============================================================
+// Reconnaissance (robots.txt / security.txt)
+// ============================================================
 async function runRecon(origin) {
   const out = [];
   async function tryFetch(path, label) {
@@ -475,8 +448,139 @@ async function runRecon(origin) {
   return out;
 }
 
-// ---------- Main flow ----------
+// ============================================================
+// TLS / certificate check (manual, uses chrome.debugger + CDP)
+// ============================================================
+function renderTlsFindings(response) {
+  const scopeNote = {
+    level: "info", title: "Scope vs. testssl.sh",
+    observed: "This reads what the browser itself negotiated for this one connection (protocol, cipher, certificate) via Chrome's DevTools Protocol. It cannot enumerate every protocol version and cipher suite a server would accept, and cannot probe for implementation bugs like Heartbleed, POODLE, ROBOT, or CCS injection — those need raw TLS handshakes crafted outside the browser's TLS stack, which browser extensions have no API to do. For that level of testing, run testssl.sh or sslyze against the host directly."
+  };
+  if (response.error) return [scopeNote, { level: "fail", title: "TLS/Cert check failed", observed: response.error }];
+
+  const sec = response.data.security;
+  const out = [scopeNote];
+
+  const proto = sec.protocol || "unknown";
+  const weakProto = /SSL|TLS ?1(\.0|\.1)?\b/i.test(proto) && !/TLS ?1\.[23]/i.test(proto);
+  out.push({
+    level: weakProto ? "fail" : "pass",
+    title: "Negotiated TLS protocol version", observed: proto,
+    why: weakProto ? "An outdated protocol version was negotiated for this connection. TLS 1.0/1.1 and any SSL version have known weaknesses and are deprecated by all major standards bodies." : undefined,
+    recommendation: weakProto ? "Disable TLS 1.0/1.1 and SSLv3 on the server; support only TLS 1.2 and 1.3." : undefined
+  });
+
+  out.push({ level: "info", title: "Negotiated cipher suite", observed: `${sec.cipher || "unknown"}${sec.keyExchange ? `, key exchange: ${sec.keyExchange}${sec.keyExchangeGroup ? " (" + sec.keyExchangeGroup + ")" : ""}` : ""}. Note: this is only what your browser chose from the server's offered list, not the full list the server supports.` });
+
+  const subject = sec.subjectName || "unknown";
+  const issuer = sec.issuer || "unknown";
+  const selfSigned = subject && issuer && subject === issuer;
+  out.push({
+    level: selfSigned ? "warn" : "pass",
+    title: selfSigned ? "Certificate appears self-signed" : "Certificate issuer",
+    observed: `Subject: ${subject} | Issuer: ${issuer}`,
+    why: selfSigned ? "A self-signed certificate is not validated by a public CA, so nothing prevents an attacker from presenting their own self-signed cert in a MITM position unless the client has been specifically configured to pin/trust this exact cert." : undefined,
+    recommendation: selfSigned ? "Use a certificate from a trusted CA for anything beyond internal/dev use, or ensure clients pin the expected certificate." : undefined
+  });
+
+  if (sec.validTo) {
+    const now = Date.now() / 1000;
+    const daysLeft = Math.floor((sec.validTo - now) / 86400);
+    let level = "pass", why, rec;
+    if (sec.validTo < now) { level = "fail"; why = "The certificate has already expired. Browsers will show hard trust errors, and any client-side pinning or automation expecting a valid chain will fail."; rec = "Renew the certificate immediately."; }
+    else if (daysLeft < 14) { level = "fail"; why = `Certificate expires in ${daysLeft} day(s). Expiry this close is a real operational risk (site-down / trust-error incident).`; rec = "Renew now and verify auto-renewal (e.g. ACME/Let's Encrypt) is actually working."; }
+    else if (daysLeft < 30) { level = "warn"; why = `Certificate expires in ${daysLeft} day(s).`; rec = "Schedule renewal well before expiry."; }
+    out.push({
+      level, title: "Certificate validity window",
+      observed: `Valid from ${new Date(sec.validFrom * 1000).toISOString().slice(0,10)} to ${new Date(sec.validTo * 1000).toISOString().slice(0,10)} (${daysLeft} day(s) remaining)`,
+      why, recommendation: rec
+    });
+  }
+
+  if (Array.isArray(sec.sanList)) {
+    out.push({ level: "info", title: "Subject Alternative Names", observed: `${sec.sanList.length} SAN(s): ${sec.sanList.slice(0,8).join(", ")}${sec.sanList.length > 8 ? "…" : ""}` });
+  }
+  if (sec.certificateTransparencyCompliance) {
+    out.push({ level: sec.certificateTransparencyCompliance === "compliant" ? "pass" : "info", title: "Certificate Transparency compliance", observed: sec.certificateTransparencyCompliance });
+  }
+
+  return out;
+}
+
+// ============================================================
+// Filter engine
+// ============================================================
+let filterState = { level: null, category: "all", search: "" };
+let taggedBase = [];   // headers + cookies + page + recon, tagged
+let tlsTagged = [];    // TLS findings, tagged (empty until run)
+
+function allTagged() { return [...taggedBase, ...tlsTagged]; }
+
+function applyFilters() {
+  const all = allTagged();
+  const q = filterState.search.trim().toLowerCase();
+  const filtered = all.filter(f => {
+    if (filterState.level && f.level !== filterState.level) return false;
+    if (filterState.category !== "all" && f.category !== filterState.category) return false;
+    if (q) {
+      const hay = `${f.title} ${f.observed} ${f.category || ""}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+  const noFiltersActive = !filterState.level && filterState.category === "all" && !q;
+  document.getElementById("results").innerHTML = renderResults(filtered, noFiltersActive);
+
+  document.querySelectorAll("#summary > div").forEach(el => el.classList.toggle("active-filter", el.dataset.level === filterState.level));
+
+  const chips = [];
+  if (filterState.level) chips.push({ key: "level", label: filterState.level.toUpperCase() });
+  if (filterState.category !== "all") chips.push({ key: "category", label: filterState.category });
+  if (q) chips.push({ key: "search", label: `"${filterState.search}"` });
+  const bar = document.getElementById("activeFiltersBar");
+  if (!chips.length) {
+    bar.innerHTML = "";
+  } else {
+    bar.innerHTML = chips.map(c => `<span class="chip" data-key="${c.key}">${escapeHtml(c.label)}<button data-clear="${c.key}">×</button></span>`).join("") +
+      `<button class="clear-all" id="clearAllFilters">Clear all</button>`;
+  }
+}
+
+document.getElementById("summary").addEventListener("click", (e) => {
+  const box = e.target.closest("[data-level]");
+  if (!box) return;
+  filterState.level = filterState.level === box.dataset.level ? null : box.dataset.level;
+  applyFilters();
+});
+document.getElementById("categoryFilter").addEventListener("change", (e) => {
+  filterState.category = e.target.value;
+  applyFilters();
+});
+document.getElementById("searchFilter").addEventListener("input", (e) => {
+  filterState.search = e.target.value;
+  applyFilters();
+});
+document.getElementById("activeFiltersBar").addEventListener("click", (e) => {
+  if (e.target.id === "clearAllFilters") {
+    filterState = { level: null, category: "all", search: "" };
+    document.getElementById("categoryFilter").value = "all";
+    document.getElementById("searchFilter").value = "";
+    applyFilters();
+    return;
+  }
+  const clearKey = e.target.dataset.clear;
+  if (!clearKey) return;
+  if (clearKey === "level") filterState.level = null;
+  if (clearKey === "category") { filterState.category = "all"; document.getElementById("categoryFilter").value = "all"; }
+  if (clearKey === "search") { filterState.search = ""; document.getElementById("searchFilter").value = ""; }
+  applyFilters();
+});
+
+// ============================================================
+// Main flow
+// ============================================================
 let lastResults = null;
+let currentTabId = null;
 
 async function runOne(tab) {
   const isHttps = tab.url.startsWith("https:");
@@ -496,6 +600,7 @@ async function run() {
     document.getElementById("url").textContent = "Unsupported page (not http/https).";
     return;
   }
+  currentTabId = tab.id;
   document.getElementById("url").textContent = tab.url;
   document.getElementById("status").textContent = "Scanning…";
 
@@ -503,32 +608,48 @@ async function run() {
   lastResults = data;
 
   const headerFindings = data.record ? checkHeaders(data.record.headers, data.isHttps) : [{ level: "warn", title: "No response captured", observed: "Reload the page, then click Re-scan." }];
-  const cookieInventory = buildCookieInventory(data.cookies);
-  const cookieFindings = checkCookies(data.cookies, data.isHttps);
+  const cookieFindings = mergeCookieFindings(data.cookies, data.isHttps);
   const pageFindings = data.pageSignals ? pageChecksToFindings(data.pageSignals, data.isHttps) : [{ level: "info", title: "Page-level checks", observed: "Could not run on this tab (restricted page)." }];
 
-  document.getElementById("headers").innerHTML = renderSection(headerFindings);
-  document.getElementById("cookieInventory").innerHTML = cookieInventory.length ? renderSection(cookieInventory) : `<div class="empty">No cookies found for this origin.</div>`;
-  document.getElementById("cookies").innerHTML = renderSection(cookieFindings);
-  document.getElementById("page").innerHTML = renderSection(pageFindings);
-
   const origin = new URL(tab.url).origin;
-  document.getElementById("recon").innerHTML = `<div class="empty">Fetching…</div>`;
   const reconFindings = await runRecon(origin);
-  document.getElementById("recon").innerHTML = renderSection(reconFindings);
 
-  document.getElementById("summary").innerHTML = renderSummary([...headerFindings, ...cookieFindings, ...pageFindings, ...reconFindings]);
-  currentTaggedFindings = [
+  tlsTagged = []; // new page load invalidates any previous manual TLS check
+
+  taggedBase = [
     ...tagCategory(headerFindings, "Security Headers"),
-    ...tagCategory(cookieFindings, "Cookie Hijacking Risk"),
+    ...tagCategory(cookieFindings, "Cookies"),
     ...tagCategory(pageFindings, "Page-Level Checks"),
     ...tagCategory(reconFindings, "Reconnaissance")
   ];
-  clearFilterView();
-  lastResults.findings = { headers: headerFindings, cookieInventory, cookies: cookieFindings, page: pageFindings, recon: reconFindings };
+  document.getElementById("summary").innerHTML = renderSummary(allTagged());
+  filterState = { level: null, category: filterState.category, search: filterState.search }; // keep category/search sticky across re-scans, reset level
+  applyFilters();
 
+  lastResults.findings = { headers: headerFindings, cookies: cookieFindings, page: pageFindings, recon: reconFindings, tls: [] };
   document.getElementById("status").textContent = "";
 }
+
+async function runTlsCheck() {
+  if (!currentTabId) return;
+  const btn = document.getElementById("runTls");
+  btn.disabled = true;
+  document.getElementById("status").textContent = 'Running TLS/cert check — Chrome will show a "being debugged" banner briefly…';
+  let findings;
+  try {
+    const response = await chrome.runtime.sendMessage({ type: "RUN_TLS_CHECK", tabId: currentTabId });
+    findings = renderTlsFindings(response);
+  } catch (e) {
+    findings = [{ level: "fail", title: "TLS/Cert check failed", observed: e.message }];
+  }
+  tlsTagged = tagCategory(findings, "TLS / Certificate");
+  document.getElementById("summary").innerHTML = renderSummary(allTagged());
+  applyFilters();
+  if (lastResults) lastResults.findings.tls = findings;
+  document.getElementById("status").textContent = "";
+  btn.disabled = false;
+}
+document.getElementById("runTls").addEventListener("click", runTlsCheck);
 
 async function scanAllTabs() {
   document.getElementById("status").textContent = "Scanning all tabs…";
@@ -538,15 +659,14 @@ async function scanAllTabs() {
     if (!tab.url || !/^https?:/.test(tab.url)) continue;
     const data = await runOne(tab);
     const headerFindings = data.record ? checkHeaders(data.record.headers, data.isHttps) : [];
-    const cookieInventory = buildCookieInventory(data.cookies);
-    const cookieFindings = checkCookies(data.cookies, data.isHttps);
+    const cookieFindings = mergeCookieFindings(data.cookies, data.isHttps);
     const pageFindings = data.pageSignals ? pageChecksToFindings(data.pageSignals, data.isHttps) : [];
-    data.findings = { headers: headerFindings, cookieInventory, cookies: cookieFindings, page: pageFindings };
+    data.findings = { headers: headerFindings, cookies: cookieFindings, page: pageFindings };
     results.push(data);
   }
   lastResults = { multiTab: true, tabs: results };
   downloadJSON(lastResults, "websec-auditor-all-tabs.json");
-  document.getElementById("status").textContent = `Scanned ${results.length} tab(s), exported JSON.`;
+  document.getElementById("status").textContent = `Scanned ${results.length} tab(s), exported JSON. (TLS/Cert check is single-tab only, run it separately per tab.)`;
 }
 
 function downloadJSON(obj, filename) {

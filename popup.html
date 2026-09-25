@@ -3,49 +3,70 @@
 <head>
 <meta charset="utf-8">
 <style>
-  body { font-family: -apple-system, Segoe UI, Arial, sans-serif; width: 480px; margin: 0; padding: 10px; font-size: 12px; color: #1a1a1a; }
-  h1 { font-size: 14px; margin: 0 0 8px; }
-  h2 { font-size: 12px; margin: 14px 0 4px; border-bottom: 1px solid #ddd; padding-bottom: 2px; }
-  .url { word-break: break-all; color: #555; margin-bottom: 8px; }
-  .btnbar { display: flex; gap: 6px; margin-bottom: 8px; }
-  button { cursor: pointer; font-size: 11px; padding: 4px 8px; }
-  #status { color: #888; font-style: italic; margin-bottom: 6px; }
-  .empty { color: #888; font-style: italic; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, Segoe UI, Arial, sans-serif; width: 500px; margin: 0; padding: 0; font-size: 12px; color: #1a1a1a; background: #fff; }
+  header { padding: 10px 12px 8px; border-bottom: 1px solid #e2e2e2; }
+  h1 { font-size: 14px; margin: 0 0 3px; }
+  .url { word-break: break-all; color: #666; font-size: 11px; }
 
-  .summary { display: flex; gap: 6px; margin-bottom: 10px; }
-  .summary div { flex: 1; text-align: center; border-radius: 4px; padding: 6px 2px; font-weight: bold; cursor: pointer; border: 2px solid transparent; }
+  .btnbar { display: flex; gap: 6px; padding: 8px 12px; border-bottom: 1px solid #f0f0f0; flex-wrap: wrap; }
+  button { cursor: pointer; font-size: 11px; padding: 5px 9px; border: 1px solid #ccc; background: #f7f7f7; border-radius: 4px; }
+  button:hover { background: #eee; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  #status { padding: 0 12px; color: #888; font-style: italic; min-height: 14px; }
+
+  .summary { display: flex; gap: 6px; padding: 8px 12px; }
+  .summary div { flex: 1; text-align: center; border-radius: 5px; padding: 7px 2px; font-weight: bold; cursor: pointer; border: 2px solid transparent; user-select: none; }
   .summary div.active-filter { border-color: #333; }
   .sum-pass { background: #d4edda; color: #155724; }
   .sum-warn { background: #fff3cd; color: #856404; }
   .sum-fail { background: #f8d7da; color: #721c24; }
   .sum-info { background: #d1ecf1; color: #0c5460; }
-  .sum-count { display: block; font-size: 16px; }
+  .sum-count { display: block; font-size: 17px; }
   .sum-label { display: block; font-size: 9px; font-weight: normal; }
 
-  .cat-tag { display: inline-block; font-size: 9px; font-weight: normal; background: #eee; color: #555; padding: 1px 6px; border-radius: 8px; margin-right: 6px; white-space: nowrap; }
-  .filter-bar { display: none; align-items: center; justify-content: space-between; margin-bottom: 6px; }
-  .filter-bar span { font-weight: 600; }
+  .toolbar { display: flex; gap: 6px; padding: 0 12px 8px; }
+  .toolbar select, .toolbar input { font-size: 11.5px; padding: 5px 6px; border: 1px solid #ccc; border-radius: 4px; }
+  .toolbar select { flex: 0 0 150px; }
+  .toolbar input { flex: 1; min-width: 0; }
 
-  .item { border: 1px solid #eee; border-radius: 4px; margin-bottom: 5px; }
-  .item-head { display: flex; align-items: center; padding: 4px 6px; cursor: default; }
+  .active-filters { padding: 0 12px 6px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; min-height: 0; }
+  .chip { background: #eef2f7; border: 1px solid #d6e0ea; color: #33495e; font-size: 10.5px; padding: 2px 8px; border-radius: 10px; display: inline-flex; align-items: center; gap: 4px; }
+  .chip button { border: none; background: none; padding: 0; font-size: 12px; line-height: 1; cursor: pointer; color: #33495e; }
+  .clear-all { font-size: 10.5px; color: #06c; cursor: pointer; text-decoration: underline; background: none; border: none; padding: 0; }
+
+  #results { padding: 4px 12px 14px; }
+  .group-heading { font-size: 11.5px; font-weight: 700; color: #444; margin: 14px 0 5px; padding-bottom: 3px; border-bottom: 1px solid #e5e5e5; text-transform: uppercase; letter-spacing: 0.3px; }
+  .group-heading:first-child { margin-top: 4px; }
+
+  .item { border: 1px solid #eee; border-radius: 5px; margin-bottom: 5px; }
+  .item-head { display: flex; align-items: center; padding: 5px 7px; gap: 0; }
   .badge { flex: 0 0 44px; font-weight: bold; text-align: center; border-radius: 3px; padding: 1px 4px; margin-right: 6px; font-size: 10px; }
   .pass-badge { background: #d4edda; color: #155724; }
   .warn-badge { background: #fff3cd; color: #856404; }
   .fail-badge { background: #f8d7da; color: #721c24; }
   .info-badge { background: #d1ecf1; color: #0c5460; }
+  .cat-tag { display: inline-block; font-size: 9px; font-weight: normal; background: #eee; color: #555; padding: 1px 6px; border-radius: 8px; margin-right: 6px; white-space: nowrap; }
   .item-title { flex: 1; font-weight: 600; }
-  .item-observed { padding: 0 6px 4px 56px; color: #444; word-break: break-word; }
-  .item-body { padding: 0 6px 6px 56px; border-top: 1px dashed #eee; margin-top: 2px; }
+  .item-observed { padding: 0 7px 5px 57px; color: #444; word-break: break-word; }
+  .item-body { padding: 0 7px 7px 57px; border-top: 1px dashed #eee; margin-top: 2px; }
   .finding-label { font-weight: 600; font-size: 10.5px; color: #555; margin-top: 4px; }
   .finding-text { color: #333; }
   .cookie-value { font-family: Consolas, Menlo, monospace; font-size: 10.5px; background: #fafafa; border: 1px dashed #ddd; padding: 3px 4px; border-radius: 3px; word-break: break-all; }
+  .empty { color: #888; font-style: italic; padding: 4px 0; }
+
+  .tls-note { padding: 0 12px 6px; color: #888; font-size: 11px; }
 </style>
 </head>
 <body>
-  <h1>WebSec Header & Cookie Auditor</h1>
-  <div class="url" id="url">Loading…</div>
+  <header>
+    <h1>WebSec Header & Cookie Auditor</h1>
+    <div class="url" id="url">Loading…</div>
+  </header>
+
   <div class="btnbar">
     <button id="refresh">Re-scan</button>
+    <button id="runTls">TLS/Cert Check</button>
     <button id="export">Export JSON</button>
     <button id="scanAll">Scan All Tabs</button>
   </div>
@@ -53,28 +74,20 @@
 
   <div class="summary" id="summary"></div>
 
-  <div class="filter-bar" id="filterBar">
-    <span id="filterTitle"></span>
-    <button id="clearFilter">Clear filter</button>
+  <div class="toolbar">
+    <select id="categoryFilter">
+      <option value="all">All categories</option>
+      <option value="Security Headers">Security Headers</option>
+      <option value="Cookies">Cookies</option>
+      <option value="Page-Level Checks">Page-Level Checks</option>
+      <option value="Reconnaissance">Reconnaissance</option>
+      <option value="TLS / Certificate">TLS / Certificate</option>
+    </select>
+    <input id="searchFilter" type="text" placeholder="Search findings, headers, cookie names…">
   </div>
-  <div id="filterResults"></div>
+  <div class="active-filters" id="activeFiltersBar"></div>
 
-  <div id="sectioned">
-    <h2>Security Headers</h2>
-    <div id="headers"></div>
-
-    <h2>Cookies Found</h2>
-    <div id="cookieInventory"></div>
-
-    <h2>Cookie Hijacking Risk</h2>
-    <div id="cookies"></div>
-
-    <h2>Page-Level Checks</h2>
-    <div id="page"></div>
-
-    <h2>Reconnaissance</h2>
-    <div id="recon"></div>
-  </div>
+  <div id="results"></div>
 
   <script src="popup.js"></script>
 </body>

@@ -3,7 +3,7 @@
   "name": "WebSec Header & Cookie Auditor",
   "version": "1.0.0",
   "description": "Audits response security headers and cookie attributes for the active tab.",
-  "permissions": ["activeTab", "cookies", "webRequest", "storage", "scripting", "tabs"],
+  "permissions": ["activeTab", "cookies", "webRequest", "storage", "scripting", "tabs", "debugger"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js"
