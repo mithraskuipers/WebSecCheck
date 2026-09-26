@@ -235,7 +235,7 @@ function mergeCookieFindings(cookies, isHttps) {
       return {
         level: "pass", title: `Cookie: ${c.name} — resistant to common hijacking vectors`,
         observed: `Secure, HttpOnly, SameSite=${sameSite}. ${scopeInfo}. Network sniffing, JS/XSS theft, and cross-site riding are all mitigated for this cookie.`,
-        value: c.value, valueLength: c.value ? c.value.length : 0
+        value: c.value, valueLength: c.value ? c.value.length : 0, cookieName: c.name
       };
     }
 
@@ -261,7 +261,7 @@ function mergeCookieFindings(cookies, isHttps) {
       level, title: `Cookie: ${c.name}${isSessionLike ? " (session/auth-like)" : ""}`,
       observed: `${issues.join(", ")}. ${scopeInfo}.`,
       why: whyParts.join(" "), recommendation: recParts.join(" "),
-      value: c.value, valueLength: c.value ? c.value.length : 0
+      value: c.value, valueLength: c.value ? c.value.length : 0, cookieName: c.name
     };
   });
 }
@@ -510,11 +510,27 @@ function renderTlsFindings(response) {
 // ============================================================
 // Filter engine
 // ============================================================
-let filterState = { level: null, category: "all", search: "" };
+let filterState = { level: null, category: "all", search: "", cookieName: null };
 let taggedBase = [];   // headers + cookies + page + recon, tagged
 let tlsTagged = [];    // TLS findings, tagged (empty until run)
 
 function allTagged() { return [...taggedBase, ...tlsTagged]; }
+
+// One chip per distinct cookie found on the scanned page, so a page with several
+// cookies (e.g. MpSslSecurity, __mpx) can be narrowed to one with a single click
+// instead of typing the exact name into search.
+function renderCookieNameChips() {
+  const names = [...new Set(taggedBase.filter(f => f.category === "Cookies" && f.cookieName).map(f => f.cookieName))];
+  const container = document.getElementById("cookieNameFilters");
+  const label = document.getElementById("cookieChipLabel");
+  if (!names.length) {
+    container.innerHTML = "";
+    label.style.display = "none";
+    return;
+  }
+  label.style.display = "block";
+  container.innerHTML = names.map(n => `<button class="qf-chip cookie-chip" data-cookie="${escapeHtml(n)}">${escapeHtml(n)}</button>`).join("");
+}
 
 function applyFilters() {
   const all = allTagged();
@@ -522,21 +538,24 @@ function applyFilters() {
   const filtered = all.filter(f => {
     if (filterState.level && f.level !== filterState.level) return false;
     if (filterState.category !== "all" && f.category !== filterState.category) return false;
+    if (filterState.cookieName && f.cookieName !== filterState.cookieName) return false;
     if (q) {
       const hay = `${f.title} ${f.observed} ${f.category || ""}`.toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
   });
-  const noFiltersActive = !filterState.level && filterState.category === "all" && !q;
+  const noFiltersActive = !filterState.level && filterState.category === "all" && !q && !filterState.cookieName;
   document.getElementById("results").innerHTML = renderResults(filtered, noFiltersActive);
 
   document.querySelectorAll("#summary > div").forEach(el => el.classList.toggle("active-filter", el.dataset.level === filterState.level));
   document.querySelectorAll("#quickFilters .qf-chip").forEach(el => el.classList.toggle("active", el.dataset.category === filterState.category));
+  document.querySelectorAll("#cookieNameFilters .cookie-chip").forEach(el => el.classList.toggle("active", el.dataset.cookie === filterState.cookieName));
 
   const chips = [];
   if (filterState.level) chips.push({ key: "level", label: filterState.level.toUpperCase() });
   if (filterState.category !== "all") chips.push({ key: "category", label: filterState.category });
+  if (filterState.cookieName) chips.push({ key: "cookieName", label: `Cookie: ${filterState.cookieName}` });
   if (q) chips.push({ key: "search", label: `"${filterState.search}"` });
   const bar = document.getElementById("activeFiltersBar");
   if (!chips.length) {
@@ -557,6 +576,18 @@ document.getElementById("quickFilters").addEventListener("click", (e) => {
   const chip = e.target.closest("[data-category]");
   if (!chip) return;
   filterState.category = filterState.category === chip.dataset.category ? "all" : chip.dataset.category;
+  if (filterState.category !== "Cookies") filterState.cookieName = null;
+  applyFilters();
+});
+document.getElementById("cookieNameFilters").addEventListener("click", (e) => {
+  const chip = e.target.closest("[data-cookie]");
+  if (!chip) return;
+  if (filterState.cookieName === chip.dataset.cookie) {
+    filterState.cookieName = null;
+  } else {
+    filterState.cookieName = chip.dataset.cookie;
+    filterState.category = "Cookies";
+  }
   applyFilters();
 });
 document.getElementById("searchFilter").addEventListener("input", (e) => {
@@ -565,7 +596,7 @@ document.getElementById("searchFilter").addEventListener("input", (e) => {
 });
 document.getElementById("activeFiltersBar").addEventListener("click", (e) => {
   if (e.target.id === "clearAllFilters") {
-    filterState = { level: null, category: "all", search: "" };
+    filterState = { level: null, category: "all", search: "", cookieName: null };
     document.getElementById("searchFilter").value = "";
     applyFilters();
     return;
@@ -573,7 +604,8 @@ document.getElementById("activeFiltersBar").addEventListener("click", (e) => {
   const clearKey = e.target.dataset.clear;
   if (!clearKey) return;
   if (clearKey === "level") filterState.level = null;
-  if (clearKey === "category") filterState.category = "all";
+  if (clearKey === "category") { filterState.category = "all"; filterState.cookieName = null; }
+  if (clearKey === "cookieName") filterState.cookieName = null;
   if (clearKey === "search") { filterState.search = ""; document.getElementById("searchFilter").value = ""; }
   applyFilters();
 });
@@ -640,7 +672,8 @@ async function run() {
     ...tagCategory(reconFindings, "Reconnaissance")
   ];
   document.getElementById("summary").innerHTML = renderSummary(allTagged());
-  filterState = { level: null, category: filterState.category, search: filterState.search }; // keep category/search sticky across scans, reset level
+  renderCookieNameChips();
+  filterState = { level: null, category: filterState.category, search: filterState.search, cookieName: null }; // keep category/search sticky across scans, reset level + cookie pick
   applyFilters();
 
   lastResults.findings = { headers: headerFindings, cookies: cookieFindings, page: pageFindings, recon: reconFindings, tls: tlsFindingsResult };
