@@ -532,6 +532,7 @@ function applyFilters() {
   document.getElementById("results").innerHTML = renderResults(filtered, noFiltersActive);
 
   document.querySelectorAll("#summary > div").forEach(el => el.classList.toggle("active-filter", el.dataset.level === filterState.level));
+  document.querySelectorAll("#quickFilters .qf-chip").forEach(el => el.classList.toggle("active", el.dataset.category === filterState.category));
 
   const chips = [];
   if (filterState.level) chips.push({ key: "level", label: filterState.level.toUpperCase() });
@@ -552,8 +553,10 @@ document.getElementById("summary").addEventListener("click", (e) => {
   filterState.level = filterState.level === box.dataset.level ? null : box.dataset.level;
   applyFilters();
 });
-document.getElementById("categoryFilter").addEventListener("change", (e) => {
-  filterState.category = e.target.value;
+document.getElementById("quickFilters").addEventListener("click", (e) => {
+  const chip = e.target.closest("[data-category]");
+  if (!chip) return;
+  filterState.category = filterState.category === chip.dataset.category ? "all" : chip.dataset.category;
   applyFilters();
 });
 document.getElementById("searchFilter").addEventListener("input", (e) => {
@@ -563,7 +566,6 @@ document.getElementById("searchFilter").addEventListener("input", (e) => {
 document.getElementById("activeFiltersBar").addEventListener("click", (e) => {
   if (e.target.id === "clearAllFilters") {
     filterState = { level: null, category: "all", search: "" };
-    document.getElementById("categoryFilter").value = "all";
     document.getElementById("searchFilter").value = "";
     applyFilters();
     return;
@@ -571,7 +573,7 @@ document.getElementById("activeFiltersBar").addEventListener("click", (e) => {
   const clearKey = e.target.dataset.clear;
   if (!clearKey) return;
   if (clearKey === "level") filterState.level = null;
-  if (clearKey === "category") { filterState.category = "all"; document.getElementById("categoryFilter").value = "all"; }
+  if (clearKey === "category") filterState.category = "all";
   if (clearKey === "search") { filterState.search = ""; document.getElementById("searchFilter").value = ""; }
   applyFilters();
 });
@@ -602,19 +604,34 @@ async function run() {
   }
   currentTabId = tab.id;
   document.getElementById("url").textContent = tab.url;
-  document.getElementById("status").textContent = "Scanning…";
+  const btn = document.getElementById("refresh");
+  btn.disabled = true;
 
+  // TLS/cert check runs first and by default as part of every scan. It reloads
+  // the tab and briefly shows Chrome's "being debugged" banner (chrome.debugger +
+  // DevTools Protocol is the only way to read the actually-negotiated protocol/
+  // cipher/certificate — see the scope note in the results). Header/cookie/page/
+  // recon checks then run against that same freshly-loaded page.
+  document.getElementById("status").textContent = 'Running TLS/cert check — the tab will reload and Chrome will show a "being debugged" banner briefly…';
+  let tlsFindingsResult;
+  try {
+    const response = await chrome.runtime.sendMessage({ type: "RUN_TLS_CHECK", tabId: tab.id });
+    tlsFindingsResult = renderTlsFindings(response);
+  } catch (e) {
+    tlsFindingsResult = [{ level: "fail", title: "TLS/Cert check failed", observed: e.message }];
+  }
+  tlsTagged = tagCategory(tlsFindingsResult, "TLS / Certificate");
+
+  document.getElementById("status").textContent = "Scanning headers, cookies, page, and recon…";
   const data = await runOne(tab);
   lastResults = data;
 
-  const headerFindings = data.record ? checkHeaders(data.record.headers, data.isHttps) : [{ level: "warn", title: "No response captured", observed: "Reload the page, then click Re-scan." }];
+  const headerFindings = data.record ? checkHeaders(data.record.headers, data.isHttps) : [{ level: "warn", title: "No response captured", observed: "Click Scan again." }];
   const cookieFindings = mergeCookieFindings(data.cookies, data.isHttps);
   const pageFindings = data.pageSignals ? pageChecksToFindings(data.pageSignals, data.isHttps) : [{ level: "info", title: "Page-level checks", observed: "Could not run on this tab (restricted page)." }];
 
   const origin = new URL(tab.url).origin;
   const reconFindings = await runRecon(origin);
-
-  tlsTagged = []; // new page load invalidates any previous manual TLS check
 
   taggedBase = [
     ...tagCategory(headerFindings, "Security Headers"),
@@ -623,33 +640,13 @@ async function run() {
     ...tagCategory(reconFindings, "Reconnaissance")
   ];
   document.getElementById("summary").innerHTML = renderSummary(allTagged());
-  filterState = { level: null, category: filterState.category, search: filterState.search }; // keep category/search sticky across re-scans, reset level
+  filterState = { level: null, category: filterState.category, search: filterState.search }; // keep category/search sticky across scans, reset level
   applyFilters();
 
-  lastResults.findings = { headers: headerFindings, cookies: cookieFindings, page: pageFindings, recon: reconFindings, tls: [] };
-  document.getElementById("status").textContent = "";
-}
-
-async function runTlsCheck() {
-  if (!currentTabId) return;
-  const btn = document.getElementById("runTls");
-  btn.disabled = true;
-  document.getElementById("status").textContent = 'Running TLS/cert check — Chrome will show a "being debugged" banner briefly…';
-  let findings;
-  try {
-    const response = await chrome.runtime.sendMessage({ type: "RUN_TLS_CHECK", tabId: currentTabId });
-    findings = renderTlsFindings(response);
-  } catch (e) {
-    findings = [{ level: "fail", title: "TLS/Cert check failed", observed: e.message }];
-  }
-  tlsTagged = tagCategory(findings, "TLS / Certificate");
-  document.getElementById("summary").innerHTML = renderSummary(allTagged());
-  applyFilters();
-  if (lastResults) lastResults.findings.tls = findings;
+  lastResults.findings = { headers: headerFindings, cookies: cookieFindings, page: pageFindings, recon: reconFindings, tls: tlsFindingsResult };
   document.getElementById("status").textContent = "";
   btn.disabled = false;
 }
-document.getElementById("runTls").addEventListener("click", runTlsCheck);
 
 async function scanAllTabs() {
   document.getElementById("status").textContent = "Scanning all tabs…";
@@ -682,4 +679,18 @@ document.getElementById("refresh").addEventListener("click", run);
 document.getElementById("export").addEventListener("click", () => { if (lastResults) downloadJSON(lastResults, "websec-auditor-report.json"); });
 document.getElementById("scanAll").addEventListener("click", scanAllTabs);
 
-run();
+// Nothing runs automatically on popup open — the TLS/cert check reloads the tab
+// and briefly shows Chrome's debugger banner, so that only happens once the user
+// deliberately clicks Scan. This just previews which tab Scan would target.
+async function init() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (tab && /^https?:/.test(tab.url || "")) {
+    currentTabId = tab.id;
+    document.getElementById("url").textContent = tab.url;
+    document.getElementById("results").innerHTML = `<div class="empty">Click Scan to run header, cookie, page-level, TLS/cert, and recon checks against this tab.</div>`;
+  } else {
+    document.getElementById("url").textContent = "Unsupported page (not http/https).";
+    document.getElementById("refresh").disabled = true;
+  }
+}
+init();

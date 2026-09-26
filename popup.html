@@ -25,10 +25,13 @@
   .sum-count { display: block; font-size: 17px; }
   .sum-label { display: block; font-size: 9px; font-weight: normal; }
 
-  .toolbar { display: flex; gap: 6px; padding: 0 12px 8px; }
-  .toolbar select, .toolbar input { font-size: 11.5px; padding: 5px 6px; border: 1px solid #ccc; border-radius: 4px; }
-  .toolbar select { flex: 0 0 150px; }
-  .toolbar input { flex: 1; min-width: 0; }
+  .toolbar { display: flex; gap: 6px; padding: 0 12px 6px; }
+  .toolbar input { flex: 1; min-width: 0; font-size: 11.5px; padding: 5px 6px; border: 1px solid #ccc; border-radius: 4px; }
+
+  .quick-filters { display: flex; gap: 5px; padding: 0 12px 8px; flex-wrap: wrap; }
+  .qf-chip { border: 1px solid #ccc; background: #f7f7f7; border-radius: 12px; padding: 4px 10px; font-size: 10.5px; cursor: pointer; }
+  .qf-chip:hover { background: #eee; }
+  .qf-chip.active { background: #2b3a4a; color: #fff; border-color: #2b3a4a; }
 
   .active-filters { padding: 0 12px 6px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; min-height: 0; }
   .chip { background: #eef2f7; border: 1px solid #d6e0ea; color: #33495e; font-size: 10.5px; padding: 2px 8px; border-radius: 10px; display: inline-flex; align-items: center; gap: 4px; }
@@ -65,8 +68,7 @@
   </header>
 
   <div class="btnbar">
-    <button id="refresh">Re-scan</button>
-    <button id="runTls">TLS/Cert Check</button>
+    <button id="refresh">Scan (headers, cookies, page, TLS/cert, recon)</button>
     <button id="export">Export JSON</button>
     <button id="scanAll">Scan All Tabs</button>
   </div>
@@ -74,15 +76,15 @@
 
   <div class="summary" id="summary"></div>
 
+  <div class="quick-filters" id="quickFilters">
+    <button class="qf-chip" data-category="all">All</button>
+    <button class="qf-chip" data-category="Security Headers">Headers</button>
+    <button class="qf-chip" data-category="Cookies">Cookies</button>
+    <button class="qf-chip" data-category="Page-Level Checks">Page</button>
+    <button class="qf-chip" data-category="Reconnaissance">Recon</button>
+    <button class="qf-chip" data-category="TLS / Certificate">TLS</button>
+  </div>
   <div class="toolbar">
-    <select id="categoryFilter">
-      <option value="all">All categories</option>
-      <option value="Security Headers">Security Headers</option>
-      <option value="Cookies">Cookies</option>
-      <option value="Page-Level Checks">Page-Level Checks</option>
-      <option value="Reconnaissance">Reconnaissance</option>
-      <option value="TLS / Certificate">TLS / Certificate</option>
-    </select>
     <input id="searchFilter" type="text" placeholder="Search findings, headers, cookie names…">
   </div>
   <div class="active-filters" id="activeFiltersBar"></div>
